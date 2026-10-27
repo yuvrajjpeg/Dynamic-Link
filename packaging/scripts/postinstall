@@ -1,0 +1,29 @@
+#!/bin/sh
+# Runs as root after the payload is copied. Installs the bridge into the logged-in user's Library
+# by running install.py as that user, so files stay user-owned and ~ resolves to their home.
+src="${DYNAMIC_BRIDGE_SRC:-/Library/Application Support/Dynamic Bridge}"
+user=$(/usr/bin/stat -f%Su /dev/console)
+[ "$user" = "root" ] || [ -z "$user" ] && user="${USER}"
+home=$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory | /usr/bin/awk '{print $2}')
+log="$home/Library/Logs/Dynamic Bridge Install.log"
+
+python=""
+for candidate in /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+        /Library/Frameworks/Python.framework/Versions/Current/bin/python3 /usr/bin/python3; do
+    [ -x "$candidate" ] || continue
+    # /usr/bin/python3 is only a stub until the Command Line Tools are installed; never trigger its dialog.
+    [ "$candidate" = /usr/bin/python3 ] && ! /usr/bin/xcode-select -p >/dev/null 2>&1 && continue
+    "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null && { python="$candidate"; break; }
+done
+
+run_as_user() {
+    if [ "$(/usr/bin/id -u)" = 0 ]; then /usr/bin/sudo -u "$user" HOME="$home" "$@"; else HOME="$home" "$@"; fi
+}
+
+run_as_user /bin/mkdir -p "$home/Library/Logs"
+if [ -z "$python" ]; then
+    echo "Python 3.9 or later was not found. Install it from python.org, then run this installer again." | run_as_user /usr/bin/tee "$log" >&2
+    exit 1
+fi
+{ echo "Dynamic Bridge install $(/bin/date)"; echo "Python: $python"; } | run_as_user /usr/bin/tee "$log" >/dev/null
+run_as_user "$python" "$src/install.py" 2>&1 | run_as_user /usr/bin/tee -a "$log"
