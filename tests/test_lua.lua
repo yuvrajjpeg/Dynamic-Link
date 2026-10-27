@@ -1,6 +1,6 @@
 -- Exercises resolve_lua/dynamic_bridge.lib against a fake Resolve. Run: lua tests/test_lua.lua
 local root = arg[0]:match("^(.*)/tests/") or "."
-local bridge = dofile(root .. "/resolve_lua/dynamic_bridge.lib")
+local bridge = dofile(root .. "/resolve_lua/lib/dynamic_bridge.lua")
 local tmp = os.tmpname(); os.remove(tmp); os.execute("mkdir -p " .. bridge.quote(tmp))
 bridge.plugin, bridge.jobs = root .. "/resolve_ae", tmp .. "/jobs"
 bridge.jobs_for_ae = bridge.jobs

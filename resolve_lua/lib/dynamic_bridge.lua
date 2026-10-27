@@ -9,14 +9,23 @@ local function script_path()
     return source:sub(1, 1) == "@" and source:sub(2) or source
 end
 
--- The Mac App Store edition is sandboxed: HOME is its container, whose Movies folder links to
+M.windows = package.config:sub(1, 1) == "\\"
+
+-- macOS: the App Store edition is sandboxed. HOME is its container, whose Movies folder links to
 -- ~/Movies, the only user folder it may write. Resolve writes through that link; After Effects
 -- is handed the real path, since macOS asks before other apps read a container.
-local home = os.getenv("HOME") or ""
+-- Windows: jobs live in %USERPROFILE%\Videos; forward slashes work for Lua and After Effects.
+local home
+if M.windows then
+    home = (os.getenv("USERPROFILE") or ""):gsub("\\", "/")
+else
+    home = os.getenv("HOME") or ""
+end
 M.real_home = home:match("^(.-)/Library/Containers/") or home
-M.plugin = script_path():match("^(.*)/[^/]+$") or "."
-M.jobs = home .. "/Movies/Resolve AE Bridge"
-M.jobs_for_ae = M.real_home .. "/Movies/Resolve AE Bridge"
+M.plugin = (script_path():gsub("\\", "/")):match("^(.*)/[^/]+$") or "."
+local media_folder = M.windows and "/Videos" or "/Movies"
+M.jobs = home .. media_folder .. "/Resolve AE Bridge"
+M.jobs_for_ae = M.real_home .. media_folder .. "/Resolve AE Bridge"
 M.ae_bundle = "com.adobe.AfterEffects"
 
 local VIDEO = { mov = true, mp4 = true, mxf = true, avi = true, m4v = true, mts = true, m2ts = true }
@@ -28,7 +37,34 @@ function M.number(value)
 end
 
 function M.quote(text)
+    if M.windows then return '"' .. tostring(text):gsub("/", "\\") .. '"' end  -- Windows paths cannot contain "
     return "'" .. tostring(text):gsub("'", "'\\''") .. "'"
+end
+
+function M.mkdir(dir)
+    if M.windows then
+        os.execute("mkdir " .. M.quote(dir) .. " 2>nul")
+    else
+        os.execute("/bin/mkdir -p " .. M.quote(dir))
+    end
+end
+
+local function succeeded(status)
+    return status == 0 or status == true  -- LuaJIT returns the exit code, Lua 5.2+ returns a boolean
+end
+
+-- Newest installed After Effects on Windows, by version year in its folder name.
+function M.after_effects_exe()
+    local base = (os.getenv("ProgramW6432") or os.getenv("ProgramFiles") or "C:\\Program Files") .. "\\Adobe"
+    local pipe = io.popen('dir /b /ad "' .. base .. '\\Adobe After Effects*" 2>nul')
+    local best, best_year = nil, -1
+    for name in (pipe and pipe:lines() or function() end) do
+        local exe = base .. "\\" .. name .. "\\Support Files\\AfterFX.exe"
+        local year = tonumber(name:match("(%d%d%d%d)")) or 0
+        if M.exists(exe) and year > best_year then best, best_year = exe, year end
+    end
+    if pipe then pipe:close() end
+    return best
 end
 
 function M.read(path)
@@ -158,9 +194,15 @@ function M.handoff_jsx(job)
            "\n} finally { $._resolveBridgeHeadless = false; }\n"
 end
 
+-- Opens a project, or runs a .jsx script, in After Effects. False when After Effects is missing.
 function M.open_in_ae(path)
-    local status = os.execute("/usr/bin/open -b " .. M.ae_bundle .. " " .. M.quote(path))
-    return status == 0 or status == true  -- LuaJIT returns the exit code, Lua 5.2+ returns a boolean
+    if not M.windows then
+        return succeeded(os.execute("/usr/bin/open -b " .. M.ae_bundle .. " " .. M.quote(path)))
+    end
+    local exe = M.after_effects_exe()
+    if not exe then return false end
+    local flag = path:lower():match("%.jsx$") and "-r " or ""  -- AfterFX.exe -r runs a script file
+    return succeeded(os.execute('start "" ' .. M.quote(exe) .. " " .. flag .. M.quote(path)))
 end
 
 function M.send(resolve)
@@ -168,7 +210,7 @@ function M.send(resolve)
     local dir = M.job_dir(job.id)
     local ae_dir = M.jobs_for_ae .. "/" .. job.id
     local aep = dir .. "/Composition.aep"
-    os.execute("/bin/mkdir -p " .. M.quote(dir))
+    M.mkdir(dir)
     if M.exists(aep) then
         M.write(M.jobs .. "/pending-handoff.txt", ae_dir .. "/Open in After Effects.jsx")
         if not M.open_in_ae(ae_dir .. "/Composition.aep") then
@@ -197,8 +239,8 @@ function M.apply(resolve)
     local dir = M.job_dir(item:GetUniqueId():gsub("[^%w%-]", "_"))
     local manifest = M.read(dir .. "/job.json")
     if not manifest then error("This clip has not been sent to After Effects yet. Run Send to After Effects first.", 0) end
-    local latest = (M.read(dir .. "/latest-render.txt") or ""):gsub("%s+$", "")
-    -- After Effects records the real path; read it back through this edition's Movies link.
+    local latest = (M.read(dir .. "/latest-render.txt") or ""):gsub("^\239\187\191", ""):gsub("%s+$", "")
+    -- After Effects records the real path; read it back through the App Store edition's Movies link.
     local readable = latest:sub(1, #M.jobs_for_ae) == M.jobs_for_ae and M.jobs .. latest:sub(#M.jobs_for_ae + 1) or latest
     if latest == "" or not M.exists(readable) then
         error("No render yet. In After Effects, click Render for Resolve in the bridge panel.", 0)
@@ -228,13 +270,25 @@ end
 -- Resolve Free blocks script windows (UIManager) since 19.1, so results go to a system alert,
 -- Workspace > Console and a log file beside the jobs.
 function M.log(text)
-    os.execute("/bin/mkdir -p " .. M.quote(M.jobs))
+    M.mkdir(M.jobs)
     local f = io.open(M.jobs .. "/resolve-log.txt", "a")
     if f then f:write(os.date("%Y-%m-%d %H:%M:%S "), text, "\n") f:close() end
 end
 
 function M.show(message, failed)
     print("Dynamic Bridge: " .. message)
+    if M.windows then
+        -- The message travels through a file so no quoting rule of cmd or PowerShell can break it.
+        local text = (os.getenv("TEMP") or ".") .. "\\dynamic-bridge-message.txt"
+        local ok = pcall(M.write, text, message)
+        if ok then
+            os.execute('start "" /b powershell.exe -NoProfile -WindowStyle Hidden -Command "' ..
+                "Add-Type -AssemblyName PresentationFramework; [void][System.Windows.MessageBox]::Show(" ..
+                "[IO.File]::ReadAllText('" .. text:gsub("'", "''") .. "'), 'Dynamic Bridge', 'OK', '" ..
+                (failed and "Warning" or "Information") .. "')\"")
+        end
+        return
+    end
     os.execute("/usr/bin/osascript -e 'on run argv' -e 'activate' -e 'display alert (item 1 of argv) message (item 2 of argv)" ..
                (failed and " as critical" or "") .. "' -e 'end run' " .. M.quote("Dynamic Bridge") .. " " ..
                M.quote(message) .. " >/dev/null 2>&1 &")

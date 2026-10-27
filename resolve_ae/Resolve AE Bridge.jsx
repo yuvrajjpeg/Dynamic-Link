@@ -49,7 +49,8 @@ var ResolveAEBridge = (function () {
     }
     // Free and App Store Resolve cannot reach After Effects, so Send to After Effects leaves a note here.
     function openFromResolve() {
-        var pending = new File(Folder.myDocuments.parent.fsName + "/Movies/Resolve AE Bridge/pending-handoff.txt");
+        var media = $.os.indexOf("Windows") !== -1 ? "/Videos" : "/Movies";
+        var pending = new File(Folder.myDocuments.parent.fsName + media + "/Resolve AE Bridge/pending-handoff.txt");
         if (!pending.exists) { throw new Error("Nothing to open. In Resolve, run Dynamic Bridge - Send to After Effects first."); }
         var handoff = new File(readText(pending).replace(/\s+$/, ""));
         var aep = new File(handoff.parent.fsName + "/Composition.aep");

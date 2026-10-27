@@ -27,7 +27,7 @@ def install_lua_menu(utility):
     library.mkdir(parents=True, exist_ok=True)
     for source in (ROOT / "resolve_lua").glob("*.lua"):
         shutil.copy2(source, utility / source.name)
-    shutil.copy2(ROOT / "resolve_lua/dynamic_bridge.lib", library / "dynamic_bridge.lib")
+    shutil.copy2(ROOT / "resolve_lua/lib/dynamic_bridge.lua", library / "dynamic_bridge.lib")
     for name in ("create_composition.jsx", "Resolve AE Bridge.jsx"):
         shutil.copy2(ROOT / "resolve_ae" / name, library / name)
 

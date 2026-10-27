@@ -15,3 +15,9 @@ COPYFILE_DISABLE=1 productbuild --quiet --distribution packaging/distribution.xm
     --package-path "$work" "dist/Dynamic Bridge.pkg"
 rm -rf "$work"
 echo "Built dist/Dynamic Bridge.pkg"
+
+# Windows installer, when NSIS is available (brew install makensis).
+if command -v makensis >/dev/null 2>&1; then
+    makensis -V2 packaging/windows/installer.nsi
+    echo "Built dist/Dynamic Bridge Setup.exe"
+fi
