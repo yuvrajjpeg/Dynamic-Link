@@ -154,7 +154,7 @@ def send(resolve):
     directory.mkdir(parents=True, exist_ok=False)
     job.update(id=job_id, comp="Resolve Bridge " + job_id, aep=str(directory / "Composition.aep"),
                directory=str(directory), output_module=cfg["output_module"],
-               applied_hash=None, status="Opening After Effects")
+               applied_hash=None, auto_render=True, status="Opening After Effects")
     manifest = directory / "job.json"
     write_json(manifest, job)
     jsx = directory / "Open in After Effects.jsx"

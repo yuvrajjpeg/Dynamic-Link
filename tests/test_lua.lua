@@ -6,6 +6,15 @@ bridge.plugin, bridge.jobs = root .. "/resolve_ae", tmp .. "/jobs"
 bridge.jobs_for_ae = bridge.jobs
 local source = tmp .. "/shot 01 'final'.mov"
 bridge.write(source, "video")
+local commands = {}
+local execute = os.execute
+os.execute = function(command) commands[#commands + 1] = command; return 0 end
+bridge.open_in_ae("/jobs/shot with 'quote'/Open.jsx")
+assert(commands[1]:find("-l JavaScript", 1, true) and commands[1]:find("doscriptfile", 1, true))
+os.execute = function() return 1 end
+local launch_ok, launch_error = pcall(bridge.open_in_ae, "/jobs/Open.jsx")
+assert(not launch_ok and launch_error:find("Run Script File", 1, true))
+os.execute = execute
 local opened = {}
 bridge.open_in_ae = function(path) opened[#opened + 1] = path; return true end
 

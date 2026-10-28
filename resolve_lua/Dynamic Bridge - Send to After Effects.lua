@@ -3,7 +3,9 @@ local windows = package.config:sub(1, 1) == "\\"
 local home = (os.getenv("HOME") or ""):gsub("\\", "/")
 local appdata = (os.getenv("APPDATA") or ""):gsub("\\", "/")
 local here = (debug.getinfo(1, "S").source:gsub("\\", "/")):match("^@(.*)/[^/]+$") or ""
+local shared = (os.getenv("PROGRAMDATA") or ""):gsub("\\", "/")
 local candidates = {
+    shared .. "/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/.dynamic-bridge/dynamic_bridge.lib",
     here .. "/.dynamic-bridge/dynamic_bridge.lib",
     appdata .. "/Dynamic Bridge/dynamic_bridge.lib",
     home .. "/Library/Application Support/Fusion/Scripts/Utility/.dynamic-bridge/dynamic_bridge.lib",

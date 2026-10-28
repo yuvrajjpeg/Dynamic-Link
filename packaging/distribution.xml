@@ -9,5 +9,5 @@
     <domains enable_localSystem="true"/>
     <choices-outline><line choice="default"/></choices-outline>
     <choice id="default" title="Dynamic Bridge"><pkg-ref id="com.dynamicbridge.plugin"/></choice>
-    <pkg-ref id="com.dynamicbridge.plugin" version="0.1.0" onConclusion="none">DynamicBridge-component.pkg</pkg-ref>
+    <pkg-ref id="com.dynamicbridge.plugin" version="0.1.3" onConclusion="none">DynamicBridge-component.pkg</pkg-ref>
 </installer-gui-script>

@@ -9,7 +9,7 @@
             }
         }
         app.newProject();
-        ResolveAEBridge.ensureOutputTemplate(job.output_module || "Resolve Bridge ProRes");
+        if (job.auto_render) { ResolveAEBridge.ensureOutputTemplate(job.output_module || "Resolve Bridge ProRes"); }
         var footage = app.project.importFile(new ImportOptions(new File(job.source)));
         if (!footage.hasVideo) { throw new Error("Source has no video."); }
         var duration = job.frames / job.fps;
@@ -33,5 +33,6 @@
         ready.close();
     } catch (error) {
         alert("Resolve AE Bridge: " + error.toString());
+        throw error;
     }
 }());

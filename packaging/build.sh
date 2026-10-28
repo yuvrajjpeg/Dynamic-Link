@@ -9,7 +9,7 @@ COPYFILE_DISABLE=1 cp -R install.py README.md resolve_ae resolve_lua scripts "$p
 find "$work/root" -name __pycache__ -prune -exec rm -rf {} +
 xattr -cr "$work/root"
 COPYFILE_DISABLE=1 pkgbuild --quiet --root "$work/root" --scripts packaging/scripts \
-    --identifier com.dynamicbridge.plugin --version 0.1.0 --install-location / \
+    --identifier com.dynamicbridge.plugin --version 0.1.3 --install-location / \
     "$work/DynamicBridge-component.pkg"
 COPYFILE_DISABLE=1 productbuild --quiet --distribution packaging/distribution.xml --resources packaging/resources \
     --package-path "$work" "dist/Dynamic Bridge.pkg"

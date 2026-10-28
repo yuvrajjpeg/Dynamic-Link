@@ -197,6 +197,19 @@ end
 -- Opens a project, or runs a .jsx script, in After Effects. False when After Effects is missing.
 function M.open_in_ae(path)
     if not M.windows then
+        if path:lower():match("%.jsx$") then
+            -- Opening a JSX as a document does not execute it. Pass the path as an argv
+            -- value to JXA, so spaces, quotes and Unicode never become executable code.
+            local script = 'function run(argv) { var ae = Application("com.adobe.AfterEffects"); ae.activate(); ae.doscriptfile(argv[0]); }'
+            local log = M.jobs .. "/ae-launch.log"
+            local ok = succeeded(os.execute("/usr/bin/osascript -l JavaScript -e " .. M.quote(script) ..
+                " " .. M.quote(path) .. " >" .. M.quote(log) .. " 2>&1"))
+            if ok then return true end
+            error("Automatic After Effects handoff failed. Check " .. log ..
+                ". In After Effects choose File > Scripts > Resolve AE Bridge > Open shot from Resolve. " ..
+                "If the companion is missing, use File > Scripts > Run Script File and choose " .. path ..
+                ". Install After Effects first if it is missing.", 0)
+        end
         return succeeded(os.execute("/usr/bin/open -b " .. M.ae_bundle .. " " .. M.quote(path)))
     end
     local exe = M.after_effects_exe()
@@ -256,6 +269,10 @@ function M.apply(resolve)
     if #imported ~= 1 then error("Resolve could not import " .. latest, 0) end
     local media = imported[1]
     local props = media:GetClipProperty()
+    local fps = manifest:match('"fps":%s*([%d%.]+)')
+    if not fps or math.abs(M.number(props["FPS"]) - M.number(fps)) > 0.01 then
+        error("The render frame rate differs from the linked clip. Restore the original composition frame rate.", 0)
+    end
     if math.floor(M.number(props["Frames"]) + 0.5) ~= M.number(frames) then
         error("The render is " .. tostring(props["Frames"]) .. " frames, but the clip is " .. frames ..
               ". Keep the composition length unchanged in After Effects.", 0)
@@ -295,6 +312,8 @@ function M.show(message, failed)
 end
 
 function M.run(action, resolve)
+    if not resolve and type(Resolve) == "function" then resolve = Resolve() end
+    if not resolve and bmd and bmd.scriptapp then resolve = bmd.scriptapp("Resolve") end
     pcall(M.log, action .. " started. HOME=" .. home .. (resolve and "" or " (no resolve object)"))
     local ok, result = pcall(M[action], resolve)
     pcall(M.log, (ok and "ok: " or "error: ") .. tostring(result):gsub("\n", " "))

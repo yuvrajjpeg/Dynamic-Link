@@ -6,15 +6,15 @@ Unicode true
 !include "LogicLib.nsh"
 
 !define ROOT "../.."
-!define VERSION "0.1.0"
-!define RESOLVE_SCRIPTS "$APPDATA\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility"
+!define VERSION "0.1.3"
+!define RESOLVE_SCRIPTS "$APPDATA\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Utility"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicBridge"
 
 Name "Dynamic Bridge"
 OutFile "${ROOT}/dist/Dynamic Bridge Setup.exe"
 ; The After Effects companion goes into Program Files, which needs administrator rights.
 RequestExecutionLevel admin
-InstallDir "$APPDATA\Dynamic Bridge"
+InstallDir "$PROGRAMFILES64\Dynamic Bridge"
 BrandingText "Dynamic Bridge ${VERSION}"
 SetCompressor /SOLID lzma
 
@@ -46,11 +46,11 @@ VIAddVersionKey "LegalCopyright" "Dynamic Bridge"
 Var AECount
 
 Function .onInit
-    SetShellVarContext current
+    SetShellVarContext all
 FunctionEnd
 
 Function un.onInit
-    SetShellVarContext current
+    SetShellVarContext all
 FunctionEnd
 
 Section "Dynamic Bridge"
@@ -63,7 +63,25 @@ Section "Dynamic Bridge"
     File "${ROOT}/resolve_ae/create_composition.jsx"
     File "${ROOT}/resolve_ae/Resolve AE Bridge.jsx"
     File "${ROOT}/README.md"
+    ; Keep a self-contained library beside the all-users Resolve menu entries.
+    SetOutPath "${RESOLVE_SCRIPTS}\.dynamic-bridge"
+    File "/oname=dynamic_bridge.lib" "${ROOT}/resolve_lua/lib/dynamic_bridge.lua"
+    File "${ROOT}/resolve_ae/create_composition.jsx"
+    File "${ROOT}/resolve_ae/Resolve AE Bridge.jsx"
+    ; Hidden, like a dot folder on macOS, so Resolve is less likely to list it as a Scripts submenu.
+    SetFileAttributes "${RESOLVE_SCRIPTS}\.dynamic-bridge" HIDDEN
     DetailPrint "Resolve scripts installed in ${RESOLVE_SCRIPTS}"
+
+    ; Upgrade any per-user installation for the account running setup as well.
+    ; Otherwise Resolve can continue loading its old per-user menu/library.
+    SetShellVarContext current
+    ${If} ${FileExists} "$APPDATA\Dynamic Bridge\dynamic_bridge.lib"
+        SetOutPath "$APPDATA\Dynamic Bridge"
+        File "/oname=dynamic_bridge.lib" "${ROOT}/resolve_lua/lib/dynamic_bridge.lua"
+        File "${ROOT}/resolve_ae/create_composition.jsx"
+        File "${ROOT}/resolve_ae/Resolve AE Bridge.jsx"
+    ${EndIf}
+    SetShellVarContext all
 
     ${IfNot} ${FileExists} "$PROGRAMFILES64\Blackmagic Design\DaVinci Resolve\Resolve.exe"
         DetailPrint "DaVinci Resolve was not found in Program Files."
@@ -89,14 +107,14 @@ Section "Dynamic Bridge"
     ${EndIf}
 
     WriteUninstaller "$INSTDIR\Uninstall Dynamic Bridge.exe"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "Dynamic Bridge"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "Dynamic Bridge"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\Uninstall Dynamic Bridge.exe"
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall Dynamic Bridge.exe"'
-    WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
-    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
-    WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+    WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "Dynamic Bridge"
+    WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
+    WriteRegStr HKLM "${UNINSTALL_KEY}" "Publisher" "Dynamic Bridge"
+    WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\Uninstall Dynamic Bridge.exe"
+    WriteRegStr HKLM "${UNINSTALL_KEY}" "UninstallString" '"$INSTDIR\Uninstall Dynamic Bridge.exe"'
+    WriteRegStr HKLM "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
+    WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoModify" 1
+    WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoRepair" 1
 SectionEnd
 
 Section "Uninstall"
@@ -108,12 +126,16 @@ Section "Uninstall"
         FindNext $0 $1
     ${Loop}
     FindClose $0
+    Delete "${RESOLVE_SCRIPTS}\.dynamic-bridge\dynamic_bridge.lib"
+    Delete "${RESOLVE_SCRIPTS}\.dynamic-bridge\create_composition.jsx"
+    Delete "${RESOLVE_SCRIPTS}\.dynamic-bridge\Resolve AE Bridge.jsx"
+    RMDir "${RESOLVE_SCRIPTS}\.dynamic-bridge"
     Delete "$INSTDIR\dynamic_bridge.lib"
     Delete "$INSTDIR\create_composition.jsx"
     Delete "$INSTDIR\Resolve AE Bridge.jsx"
     Delete "$INSTDIR\README.md"
     Delete "$INSTDIR\Uninstall Dynamic Bridge.exe"
     RMDir "$INSTDIR"
-    DeleteRegKey HKCU "${UNINSTALL_KEY}"
+    DeleteRegKey HKLM "${UNINSTALL_KEY}"
     ; Renders in Videos\Resolve AE Bridge are kept: Resolve timelines still use them as takes.
 SectionEnd

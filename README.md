@@ -1,4 +1,26 @@
-# Resolve → After Effects Bridge (macOS prototype)
+# Resolve → After Effects Bridge
+
+## Windows update (0.1.2)
+
+Use `dist/Dynamic Bridge Setup.exe`. Close both apps before installing, then restart them. The installer now places Resolve scripts in the documented all-users ProgramData directory, with the shared library alongside them. It also refreshes an existing per-user library for the account running setup. If an older installation belongs to a different Windows account, uninstall that old per-user copy from that account first so it cannot shadow the new scripts.
+
+The AE panel now uses USERPROFILE to find pending handoffs, including when Documents is redirected to OneDrive. Manual renders accept compatible AVI presets as well as QuickTime and use the matching file extension. Existing named templates are reused without attempting to overwrite them.
+
+Enable **Allow Scripts to Write Files and Access Network** in AE. Test a short, ordinary video clip with matching source/timeline FPS: **Send to After Effects**, then **File → Scripts → Resolve AE Bridge → Render for Resolve**, then **Apply AE Render** in Resolve. If either action fails, capture its exact message and `%USERPROFILE%\Videos\Resolve AE Bridge\resolve-log.txt`, along with both application versions. Custom AE installation locations are not auto-detected by the Windows launcher; use AE's **Run Script File** on the exported handoff JSX in that case.
+
+Windows branches and AE behavior are covered by simulated tests; a native Windows round trip has not been verified here.
+
+## Button fixes (0.1.1)
+
+The manual workflow is **Send to After Effects** in Resolve → **Render for Resolve** in AE's **File → Scripts → Resolve AE Bridge** panel → **Apply AE Render** in Resolve. Install the updated package and restart both apps. After Effects must be installed separately.
+
+The macOS launcher now explicitly executes the handoff with JXA, records automation errors in `~/Movies/Resolve AE Bridge/ae-launch.log`, and explains the manual fallback. If automation is blocked, open the companion panel and click **Open shot from Resolve**, or use **File → Scripts → Run Script File** to run the generated `Open in After Effects.jsx` in the shot's job folder. Failed handoffs remain pending for retry.
+
+Manual sending no longer requires a render preset. **Render for Resolve** checks/creates the QuickTime template when needed, renders the complete linked duration regardless of the work area, and publishes a movie only after successful completion. Cancelled renders and changed composition timing are rejected. Existing queued renders are restored afterward.
+
+The automated tests use simulated host interfaces. After Effects is absent on the development machine; a real Resolve/AE round trip remains unverified.
+
+## Optional Studio background workflow
 
 Select one ordinary video shot, run **Replace with After Effects Composition**, animate it in AE, and save the `.aep`. A background worker renders the saved composition and selects the result as a new take on the same Resolve clip. The original and previous renders remain available in Resolve's Take Selector.
 
@@ -17,7 +39,7 @@ Resolve's documented scripting and Workflow Integration interfaces do not expose
 3. If AE is elsewhere, use `python3 install.py --ae-app '/path/to/Adobe After Effects.app'`. Missing AE or a protected Scripts folder is reported as **pending**, not installed. Install AE or grant your user write access to its Scripts folder and rerun. Configuration lives at `~/Library/Application Support/Resolve AE Bridge/config.json`; custom job directories and render-template names are preserved on reinstall, while detected app paths and Python are refreshed.
 4. In Resolve's **Preferences → System → General**, set **External scripting → Local**. Keep Resolve open while updates run.
 5. In AE, enable **Allow Scripts to Write Files and Access Network** in its scripting preferences. macOS may also request permission for the launcher to control After Effects.
-6. On the first handoff, the AE companion automatically saves a compatible existing QuickTime output preset under **Resolve Bridge ProRes** (or your configured template name). It checks the named template first, then ProRes/High Quality/Lossless candidates, and rejects non-QuickTime formats. The codec remains the candidate preset's codec: the template name alone does not force ProRes. If your AE version or language provides no matching preset, AE explains how to create one. For guaranteed ProRes output, create a template with QuickTime → Apple ProRes 422 HQ, RGB, audio off, and resize/crop disabled under that exact name. For transparency, use ProRes 4444 / RGB + Alpha. The API does not expose reliable codec selection, so the installer does not claim to force it.
+6. At manual render time (or the first Studio background handoff), the AE companion automatically saves a compatible existing QuickTime output preset under **Resolve Bridge ProRes** (or your configured template name). It checks the named template first, then ProRes/High Quality/Lossless candidates, and rejects non-QuickTime formats. The codec remains the candidate preset's codec: the template name alone does not force ProRes. If your AE version or language provides no matching preset, AE explains how to create one. For guaranteed ProRes output, create a template with QuickTime → Apple ProRes 422 HQ, RGB, audio off, and resize/crop disabled under that exact name. For transparency, use ProRes 4444 / RGB + Alpha. The API does not expose reliable codec selection, so the installer does not claim to force it.
 
 ## Use
 
@@ -38,7 +60,7 @@ The first generated project save also triggers a render. Saving with no content 
 - **Save As** to a new `.aep` path does not retarget the link. Continue saving the generated file. AE auto-save backups in other paths are ignored.
 - Each shot has a lightweight watcher. A shared lock permits **one background render at a time per jobs directory**, limiting competing AE processes. Watchers check file metadata first and hash changed files in chunks; unchanged projects are not reread every three seconds. Close AE projects normally; workers use their saved copies.
 - New renders use unique filenames, avoiding overwriting media currently in use by Resolve. Old renders are deliberately retained because timeline takes reference them. Delete only versions you have removed from your project.
-- No native right-click menu integration, live preview, Windows support, or automatic installation of either host app.
+- No native right-click menu integration, live preview, or automatic installation of either host app. The manual Lua workflow includes a Windows installer; background Python rendering is macOS-only.
 
 ## Status and troubleshooting
 
