@@ -6,7 +6,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 !define ROOT "../.."
-!define VERSION "0.1.3"
+!define VERSION "0.1.5"
 !define RESOLVE_SCRIPTS "$APPDATA\Blackmagic Design\DaVinci Resolve\Fusion\Scripts\Utility"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\DynamicBridge"
 

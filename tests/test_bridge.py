@@ -144,6 +144,76 @@ class BridgeTests(unittest.TestCase):
             self.assertNotEqual(observer.read(self.source), first)
             self.assertEqual(digest.call_count, 2)
 
+    def test_resume_skips_manual_and_broken_jobs(self):
+        base = Path(self.tmp.name)
+        aep = base / "Composition.aep"
+        aep.write_bytes(b"project")
+        job = bridge.describe(self.resolve)
+        job.update(aep=str(aep), comp="Bridge", auto_render=True)
+        bridge.write_json(base / "valid/job.json", job)
+        bridge.write_json(base / "manual/job.json", {"aep": str(aep), "track": 1})
+        bridge.write_json(base / "incomplete/job.json", {"auto_render": True})
+        (base / "broken").mkdir()
+        (base / "broken/job.json").write_text("{interrupted")
+        cfg = {"jobs_directory": str(base)}
+        with patch.object(bridge, "settings", return_value=cfg), \
+                patch.object(bridge, "start_worker") as start, self.assertLogs(bridge.LOG):
+            self.assertEqual(bridge.resume(), 1)
+        start.assert_called_once_with(base / "valid/job.json", cfg)
+
+    def test_stop_works_with_missing_host_apps(self):
+        base = Path(self.tmp.name)
+        directory = base / "shot"
+        bridge.write_json(directory / "job.json", {})
+        with patch.object(bridge, "settings", return_value={"jobs_directory": str(base)}) as cfg:
+            bridge.stop()
+        cfg.assert_called_once_with(require_apps=False)
+        self.assertTrue((directory / "STOP").exists())
+
+    def test_saved_job_uses_its_own_render_template(self):
+        cfg = {"aerender": "/fake/aerender", "output_module": "New default"}
+        job = {"comp": "Composition", "frames": 10, "output_module": "Original template"}
+        out = Path(self.tmp.name) / "result.mov"
+        out.write_bytes(b"movie")
+        with patch.object(bridge.subprocess, "run", return_value=Mock(returncode=0)) as run:
+            bridge.render(cfg, job, self.source, out)
+        args = run.call_args.args[0]
+        self.assertEqual(args[args.index("-OMtemplate") + 1], "Original template")
+
+    def test_probe_failure_reports_native_crash(self):
+        cfg = {"python": "/fake/python"}
+        with patch.object(bridge.subprocess, "run", return_value=Mock(returncode=-11, stderr="", stdout="")):
+            with self.assertRaisesRegex(RuntimeError, "Automatic updates are unavailable.*exit code -11"):
+                bridge.check_connection(cfg)
+
+    def test_file_changed_during_hash_is_not_treated_as_saved(self):
+        observer = bridge.SaveObserver()
+        original = bridge.fingerprint
+        def save_during_hash(path):
+            result = original(path)
+            Path(path).write_bytes(b"another save")
+            return result
+        with patch.object(bridge, "fingerprint", side_effect=save_during_hash):
+            self.assertIsNone(observer.read(self.source))
+        self.assertEqual(observer.read(self.source), original(self.source))
+
+    def test_stop_while_connecting_prevents_placement(self):
+        directory, aep, manifest = self.watcher_fixture()
+        clock = iter(range(0, 1000, 4))
+        def fake_render(cfg, job, snapshot, output):
+            output.write_bytes(b"movie")
+        def slow_connection():
+            (directory / "STOP").touch()
+            return self.resolve
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(bridge, "settings", return_value={}))
+            stack.enter_context(patch.object(bridge.time, "monotonic", side_effect=lambda: next(clock)))
+            stack.enter_context(patch.object(bridge, "render", side_effect=fake_render))
+            stack.enter_context(patch.object(bridge, "connect", side_effect=slow_connection))
+            apply = stack.enter_context(patch.object(bridge, "apply_render"))
+            bridge.watch(manifest)
+        apply.assert_not_called()
+
     def watcher_fixture(self):
         directory = Path(self.tmp.name)
         aep = directory / "Composition.aep"

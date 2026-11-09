@@ -39,20 +39,20 @@ def number(value):
     return float(match.group())
 
 
-def settings():
+def settings(require_apps=True):
     cfg = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
     apps = sorted(Path("/Applications").glob("Adobe After Effects*/*.app"))
     if not cfg.get("after_effects_app") and apps:
         cfg["after_effects_app"] = str(apps[-1])
     app = Path(cfg.get("after_effects_app", "/missing/After Effects.app")).expanduser()
     render = Path(cfg.get("aerender", str(app.parent / "aerender"))).expanduser()
-    if not app.is_dir() or not render.is_file():
+    if require_apps and (not app.is_dir() or not render.is_file()):
         raise RuntimeError("After Effects/aerender not found. Set after_effects_app and aerender in " + str(CONFIG))
     cfg.update(after_effects_app=str(app), aerender=str(render))
     cfg.setdefault("output_module", "Resolve Bridge ProRes")
     cfg.setdefault("jobs_directory", str(Path.home() / "Movies/Resolve AE Bridge"))
     cfg.setdefault("python", shutil.which("python3") or sys.executable)
-    if not Path(cfg["python"]).is_file():
+    if require_apps and not Path(cfg["python"]).is_file():
         raise RuntimeError("Set python in config.json to an installed Python 3.9+ executable.")
     return cfg
 
@@ -141,13 +141,13 @@ def send(resolve):
     cfg = settings()
     job = describe(resolve)
     base = Path(cfg["jobs_directory"]).expanduser()
-    # Reopen an existing link instead of nesting a new composition around its render.
-    for manifest in base.glob("*/job.json"):
-        old = json.loads(manifest.read_text())
+    # Manual Lua jobs share this directory but have a different schema and no watcher.
+    for manifest, old in background_jobs(base):
         if (Path(old["aep"]).is_file() and
                 all(old.get(k) == job[k] for k in ("project_id", "timeline_id", "clip_id"))):
-            start_worker(manifest, cfg)
+            find_target(resolve, old)
             subprocess.run(["/usr/bin/open", "-a", cfg["after_effects_app"], old["aep"]], check=True)
+            start_worker(manifest, cfg)
             return manifest
     job_id = uuid.uuid4().hex[:12]
     directory = base / job_id
@@ -197,6 +197,26 @@ def connect():
     return resolve
 
 
+def check_connection(cfg):
+    """Terminal-only probe in the worker interpreter; never block a Resolve menu callback."""
+    try:
+        result = subprocess.run([cfg["python"], str(ROOT / "bridge.py"), "probe"],
+                                capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Automatic updates cannot connect to Resolve within 30 seconds. "
+                           "Enable External scripting: Local in Resolve Studio and retry.") from exc
+    if result.returncode:
+        detail = (result.stderr or result.stdout or "exit code " + str(result.returncode)).strip()
+        raise RuntimeError("Automatic updates are unavailable: the background Python process could not "
+                           "connect to Resolve. Keep Resolve Studio open, enable External scripting: Local, "
+                           "and check the Python executable in config.json. Details: " + detail[-2000:])
+
+
+def file_signature(path):
+    stat = Path(path).stat()
+    return stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
 def fingerprint(path):
     try:
         digest = hashlib.sha256()
@@ -216,13 +236,18 @@ class SaveObserver:
 
     def read(self, path):
         try:
-            stat = Path(path).stat()
-            signature = (stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+            signature = file_signature(path)
         except OSError:
             self.signature, self.digest = None, None
             return None
         if signature != self.signature:
-            self.digest = fingerprint(path)
+            digest = fingerprint(path)
+            try:
+                unchanged = file_signature(path) == signature
+            except OSError:
+                unchanged = False
+            # A save replaced or changed the file while hashing. Wait for the next poll.
+            self.digest = digest if unchanged else None
             self.signature = signature if self.digest else None
         return self.digest
 
@@ -272,8 +297,9 @@ def apply_render(resolve, job, output):
 
 def render(cfg, job, snapshot, output):
     import fcntl
+    template = job.get("output_module", cfg.get("output_module", "Resolve Bridge ProRes"))
     args = [cfg["aerender"], "-project", str(snapshot), "-comp", job["comp"],
-            "-OMtemplate", cfg["output_module"], "-s", "0", "-e", str(job["frames"] - 1),
+            "-OMtemplate", template, "-s", "0", "-e", str(job["frames"] - 1),
             "-output", str(output)]
     # All jobs in a library share a render lock, bounding AE memory/CPU usage.
     with (output.parent.parent / ".render.lock").open("a") as lock:
@@ -291,26 +317,33 @@ def render(cfg, job, snapshot, output):
             result = subprocess.run(args, stdout=log, stderr=subprocess.STDOUT, timeout=21600)
     if result.returncode or not output.is_file() or output.stat().st_size == 0:
         raise RuntimeError("AE render failed. Check " + str(output.with_suffix(".log")) +
-                           "; ensure output-module template '" + cfg["output_module"] + "' exists.")
+                           "; ensure output-module template '" + template + "' exists.")
 
 
 def watch(manifest):
     import fcntl
     manifest = Path(manifest)
     # A lock per shot prevents duplicate workers after repeated menu clicks.
-    with (manifest.parent / "worker.lock").open("w") as lock:
+    with (manifest.parent / "worker.lock").open("a+") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return
+        lock.seek(0)
+        lock.truncate()
         lock.write(str(os.getpid()))
         lock.flush()
         cfg = settings()
         job = json.loads(manifest.read_text())
-        last_seen, stable_since, last_activity = None, time.monotonic(), time.monotonic()
+        poll_seconds = max(0.1, float(cfg.get("poll_seconds", 1)))
+        settle_seconds = max(0.1, float(cfg.get("settle_seconds", 3)))
+        last_seen, stable_since = None, time.monotonic()
+        job["status"] = "Watching After Effects saves"
+        job["worker_pid"] = os.getpid()
+        write_json(manifest, job)
         failed = None
         observer = SaveObserver()
-        while time.monotonic() - last_activity < 8 * 3600:
+        while True:
             if (manifest.parent / "STOP").exists():
                 break
             if (manifest.parent / "RETRY").exists():
@@ -319,11 +352,11 @@ def watch(manifest):
             current = observer.read(job["aep"])
             if current != last_seen:
                 last_seen, stable_since = current, time.monotonic()
-                last_activity = time.monotonic()
-            if current and current != job.get("applied_hash") and current != failed and time.monotonic() - stable_since >= 3:
+            if current and current != job.get("applied_hash") and current != failed and time.monotonic() - stable_since >= settle_seconds:
                 try:
                     pending = job.get("pending")
-                    if not pending or pending["hash"] != current:
+                    if (not pending or pending["hash"] != current or
+                            not Path(pending["output"]).is_file()):
                         version = uuid.uuid4().hex[:10]
                         snapshot = manifest.parent / ("saved-" + version + ".aep")
                         shutil.copy2(job["aep"], snapshot)
@@ -348,9 +381,16 @@ def watch(manifest):
                         break
                     if fingerprint(job["aep"]) != current:
                         continue
-                    saved = apply_render(connect(), job, job["pending"]["output"])
+                    target = connect()
+                    # Connecting may block while Resolve is busy. Recheck immediately before placement.
+                    if (manifest.parent / "STOP").exists():
+                        break
+                    if fingerprint(job["aep"]) != current:
+                        continue
+                    saved = apply_render(target, job, job["pending"]["output"])
                     job["applied_hash"] = current
                     job.pop("pending", None)
+                    job.pop("last_error", None)
                     job["status"] = ("Updated in Resolve and project saved" if saved else
                                      "Take updated; Resolve could not save the project. Save it manually.")
                     LOG.info(job["status"])
@@ -359,24 +399,92 @@ def watch(manifest):
                     job["last_error"] = str(exc)
                     LOG.warning("%s", exc)
                 write_json(manifest, job)
-            time.sleep(3)
+            time.sleep(poll_seconds)
+        job.pop("worker_pid", None)
         job["status"] = "Watcher stopped. Run Resume AE Updates to restart."
         write_json(manifest, job)
 
 
+def background_jobs(base):
+    """Isolate damaged/manual jobs so one shot cannot prevent recovery of the rest."""
+    required = {"aep", "comp", "project_id", "timeline_id", "clip_id", "original_media_id",
+                "accepted_media_ids", "track", "start", "end", "offset", "frames", "fps"}
+    for manifest in Path(base).expanduser().glob("*/job.json"):
+        try:
+            job = json.loads(manifest.read_text())
+            if not isinstance(job, dict) or not job.get("auto_render"):
+                continue
+            if not required.issubset(job) or not isinstance(job["track"], list) or len(job["track"]) != 2:
+                raise ValueError("incomplete background job")
+            yield manifest, job
+        except (OSError, ValueError, TypeError) as exc:
+            LOG.warning("Skipping %s: %s", manifest, exc)
+
+
 def resume():
     cfg = settings()
-    for manifest in Path(cfg["jobs_directory"]).expanduser().glob("*/job.json"):
-        if Path(json.loads(manifest.read_text())["aep"]).is_file():
-            (manifest.parent / "STOP").unlink(missing_ok=True)
+    count = 0
+    for manifest, job in background_jobs(cfg["jobs_directory"]):
+        if Path(job["aep"]).is_file():
             start_worker(manifest, cfg)
+            count += 1
+    return count
+
+
+def stop():
+    cfg = settings(require_apps=False)
+    count = 0
+    for manifest in Path(cfg["jobs_directory"]).expanduser().glob("*/job.json"):
+        (manifest.parent / "STOP").touch()
+        count += 1
+    return count
+
+
+def doctor():
+    """Read-only setup report: never loads Resolve's native scripting library."""
+    cfg = settings(require_apps=False)
+    checks = {
+        "After Effects installed": Path(cfg["after_effects_app"]).is_dir(),
+        "aerender installed": Path(cfg["aerender"]).is_file(),
+        "Python executable exists": Path(cfg["python"]).is_file(),
+        "Resolve installed": any(p.is_dir() for p in (
+            Path("/Applications/DaVinci Resolve.app"),
+            Path("/Applications/DaVinci Resolve/DaVinci Resolve.app"))),
+    }
+    for name, ok in checks.items():
+        print(("OK: " if ok else "MISSING: ") + name)
+    print("Configuration: " + str(CONFIG))
+    print("After Effects: " + cfg["after_effects_app"])
+    print("Renderer: " + cfg["aerender"])
+    print("Jobs: " + cfg["jobs_directory"])
+    print("Automatic updates additionally require Resolve Studio, External scripting: Local, "
+          "and AE scripting file access. A live round trip is needed to verify these.")
+    return all(checks.values())
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if len(sys.argv) == 3 and sys.argv[1] == "watch":
         watch(sys.argv[2])
+    elif len(sys.argv) == 2 and sys.argv[1] == "probe":
+        try:
+            context(connect())
+            print("Connected to the current Resolve project and timeline.")
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
     elif len(sys.argv) == 2 and sys.argv[1] == "resume":
-        resume()
+        print("Resumed %d background link(s)." % resume())
+    elif len(sys.argv) == 2 and sys.argv[1] == "stop":
+        print("Stop requested for %d link(s)." % stop())
+    elif len(sys.argv) == 2 and sys.argv[1] == "check-connection":
+        try:
+            check_connection(settings(require_apps=False))
+            print("Background connection to Resolve works.")
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+    elif len(sys.argv) == 2 and sys.argv[1] == "doctor":
+        sys.exit(0 if doctor() else 1)
     else:
-        print("Use Resolve's Replace with After Effects Composition script, or: bridge.py resume")
+        print("Use Resolve's Replace with After Effects Composition script, or: bridge.py resume|stop|doctor|check-connection")

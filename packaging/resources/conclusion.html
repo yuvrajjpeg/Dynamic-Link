@@ -1,11 +1,14 @@
 <html><body style="font-family:-apple-system,Helvetica;font-size:13px;line-height:1.5">
-<h2 style="color:#2F6BFF;margin-top:0">Dynamic Bridge is installed</h2>
+<h2 style="color:#2F6BFF;margin-top:0">Dynamic Bridge setup</h2>
+<p>Install After Effects separately if it is missing, then rerun this installer. Restart both applications after installation.</p>
+<p><b>Automatic updates — Resolve Studio 21.1+:</b></p>
 <ol>
-<li>Restart DaVinci Resolve and After Effects.</li>
-<li>In After Effects scripting preferences, turn on <b>Allow Scripts to Write Files and Access Network</b>.</li>
-<li>In Resolve, select a clip and choose <b>Workspace → Scripts → Dynamic Bridge - Send to After Effects</b>.</li>
-<li>In After Effects, open <b>File → Scripts → Resolve AE Bridge</b>, animate, then click <b>Render for Resolve</b>.</li>
-<li>Back in Resolve, choose <b>Dynamic Bridge - Apply AE Render</b>. The render becomes a new take on the clip.</li>
+<li>Enable <b>External scripting → Local</b> in Resolve and <b>Allow Scripts to Write Files and Access Network</b> in After Effects.</li>
+<li>Select a video clip in Resolve. Choose <b>Workspace → Scripts → Utility → Replace with After Effects Composition</b>.</li>
+<li>Animate the generated composition in After Effects and press <b>Cmd+S</b>.</li>
+<li>Keep Resolve and the original timeline open. The finished background render becomes a new take automatically.</li>
 </ol>
-<p>Works with DaVinci Resolve Free, Studio and the Mac App Store edition. Install details are saved to <b>~/Library/Logs/Dynamic Bridge Install.log</b>.</p>
+<p>Updates require rendering time. Run <b>Resume AE Updates</b> after restarting your computer.</p>
+<p><b>Manual workflow — Free, Studio or App Store:</b> Send to After Effects → Render for Resolve in the AE panel → Apply AE Render in Resolve.</p>
+<p>Setup details: <b>~/Library/Logs/Dynamic Bridge Install.log</b>.</p>
 </body></html>

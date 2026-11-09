@@ -69,8 +69,8 @@ var ResolveAEBridge = (function () {
         pending.remove();
         return "Opened the linked composition.";
     }
-    function renderForResolve() {
-        var job = linkedJob(), comp = null, i;
+    function linkedComposition(job) {
+        var comp = null, i;
         for (i = 1; i <= app.project.numItems; i++) {
             if (app.project.item(i) instanceof CompItem && app.project.item(i).name === job.comp) { comp = app.project.item(i); }
         }
@@ -78,6 +78,30 @@ var ResolveAEBridge = (function () {
         if (Math.abs(comp.frameRate - job.fps) > 0.01 || Math.abs(comp.duration * job.fps - job.frames) > 0.05) {
             throw new Error("Restore the linked composition's original frame rate and duration before rendering.");
         }
+        return comp;
+    }
+    function saveForResolve() {
+        var job = linkedJob();
+        if (!job.auto_render) { throw new Error("This is a manual link. Use Render for Resolve, then Apply AE Render in Resolve. For automatic updates, send the clip using Replace with After Effects Composition."); }
+        linkedComposition(job);
+        if (new File(job.aep).fsName !== app.project.file.fsName) {
+            throw new Error("Save to the original linked project: " + job.aep + ". Save As does not move the link.");
+        }
+        app.project.save();
+        return "Saved. Resolve updates automatically when the background render finishes. Keep Resolve open.";
+    }
+    function linkStatus() {
+        var job = linkedJob();
+        if (!job.auto_render) { return "Manual link: Render for Resolve, then Apply AE Render in Resolve."; }
+        var stopped = new File(job.directory + "/STOP");
+        if (stopped.exists) { return "Automatic updates stopped. Run Resume AE Updates in Resolve."; }
+        return "Automatic link: " + (job.status || "Waiting for the background worker") +
+            ". Save this project to update Resolve. Use Resume AE Updates after a restart or worker failure.";
+    }
+    function renderForResolve() {
+        var job = linkedJob();
+        if (job.auto_render) { return saveForResolve(); }
+        var comp = linkedComposition(job), i;
         ensureOutputTemplate(job.output_module || "Resolve Bridge ProRes", true);
         app.project.save();
         // Render only this composition: park anything else the user has queued.
@@ -85,9 +109,10 @@ var ResolveAEBridge = (function () {
         for (i = 1; i <= queue.numItems; i++) {
             if (queue.item(i).status === RQItemStatus.QUEUED) { parked.push(queue.item(i)); queue.item(i).render = false; }
         }
-        item = queue.items.add(comp);
+        item = null;
         var output = new File(job.directory + "/render-" + new Date().getTime() + ".mov");
         try {
+            item = queue.items.add(comp);
             item.outputModule(1).applyTemplate(job.output_module || "Resolve Bridge ProRes");
             var format = String(item.outputModule(1).getSettings(GetSettingsFormat.STRING)["Format"]);
             if (/^(avi|video for windows)$/i.test(format)) {
@@ -100,7 +125,7 @@ var ResolveAEBridge = (function () {
             queue.render();
             if (item.status !== RQItemStatus.DONE) { throw new Error("Render stopped or failed. Finish rendering before applying it in Resolve."); }
         } finally {
-            item.remove();
+            if (item) { item.remove(); }
             for (i = 0; i < parked.length; i++) { parked[i].render = true; }
         }
         if (!output.exists || output.length === 0) { throw new Error("After Effects did not write " + output.fsName); }
@@ -113,10 +138,12 @@ var ResolveAEBridge = (function () {
         win.alignChildren = "fill";
         win.add("statictext", undefined, "1. Open the shot you sent from Resolve.");
         var open = win.add("button", undefined, "Open shot from Resolve");
-        win.add("statictext", undefined, "2. Animate, then render it back.");
+        win.add("statictext", undefined, "2. Animate. Automatic links update when you save.");
+        var save = win.add("button", undefined, "Save and update Resolve (automatic link)");
         var render = win.add("button", undefined, "Render for Resolve");
+        var refresh = win.add("button", undefined, "Check link status");
         var status = win.add("statictext", undefined, "Keep the composition name and length unchanged.", {multiline: true});
-        status.preferredSize = [320, 40];
+        status.preferredSize = [380, 100];
         function run(action) {
             try { status.text = action(); } catch (error) {
                 status.text = error.message || String(error);
@@ -125,10 +152,14 @@ var ResolveAEBridge = (function () {
         }
         open.onClick = function () { run(openFromResolve); };
         render.onClick = function () { run(renderForResolve); };
+        save.onClick = function () { run(saveForResolve); };
+        refresh.onClick = function () { run(linkStatus); };
+        try { status.text = linkStatus(); } catch (ignored) {}
         win.show();
         $._resolveBridgePanel = win;
     }
     return { ensureOutputTemplate: ensureOutputTemplate, showPanel: showPanel,
-             openFromResolve: openFromResolve, renderForResolve: renderForResolve };
+             openFromResolve: openFromResolve, renderForResolve: renderForResolve,
+             saveForResolve: saveForResolve, linkStatus: linkStatus };
 }());
 if (!$._resolveBridgeHeadless) { ResolveAEBridge.showPanel(); }

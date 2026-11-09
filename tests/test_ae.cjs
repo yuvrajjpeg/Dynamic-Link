@@ -90,7 +90,7 @@ function renderHost(status = 'DONE', format = 'QuickTime') {
       getSettings:()=>({Format:format}), saveAsTemplate(){}}), remove(){}};
     return item;
   };
-  return {...h, files, item, parked, comp};
+  return {...h, files, item, parked, comp, job};
 }
 
 test('render forces full linked duration and restores parked queue',()=>{
@@ -138,4 +138,46 @@ test('Windows pending handoff uses USERPROFILE even with OneDrive Documents',()=
   h.context.File = function(p) { paths.push(p); this.exists=false; };
   assert.throws(()=>h.context.ResolveAEBridge.openFromResolve(), /Nothing to open/);
   assert.equal(paths[0], 'C:/Users/Editor/Videos/Resolve AE Bridge/pending-handoff.txt');
+});
+
+
+test('queue insertion failure restores previously queued user renders',()=>{
+  const h = renderHost();
+  const add = h.context.app.project.renderQueue.items.add;
+  let calls = 0;
+  h.context.app.project.renderQueue.items.add = () => {
+    if (calls++ === 0) return add();
+    throw new Error('Cannot add render item');
+  };
+  assert.throws(()=>h.context.ResolveAEBridge.renderForResolve(), /Cannot add/);
+  assert.equal(h.parked.render,true);
+  assert.equal(h.files['/jobs/shot/latest-render.txt'],undefined);
+});
+
+
+test('automatic link saves without starting a competing manual render',()=>{
+  const h = renderHost();
+  h.job.auto_render = true;
+  h.job.aep = '/jobs/shot/Composition.aep';
+  h.context.app.project.file.fsName = h.job.aep;
+  const message = h.context.ResolveAEBridge.renderForResolve();
+  assert.equal(h.events.saved,true);
+  assert.match(message,/automatically/);
+  assert.equal(h.events.output,undefined);
+  assert.equal(h.parked.render,true);
+});
+test('Save As cannot silently redirect an automatic link',()=>{
+  const h = renderHost();
+  h.job.auto_render = true;
+  h.job.aep = '/jobs/shot/Composition.aep';
+  h.context.app.project.file.fsName = '/jobs/shot/Renamed.aep';
+  assert.throws(()=>h.context.ResolveAEBridge.saveForResolve(),/original linked project/);
+  assert.equal(h.events.saved,undefined);
+});
+test('automatic save validates composition timing',()=>{
+  const h = renderHost();
+  h.job.auto_render = true;
+  h.comp.duration = 3;
+  assert.throws(()=>h.context.ResolveAEBridge.saveForResolve(),/original frame rate and duration/);
+  assert.equal(h.events.saved,undefined);
 });

@@ -1,5 +1,33 @@
 # Resolve → After Effects Bridge
 
+## Automatic save-to-Resolve workflow (0.1.5)
+
+On a **Mac with Resolve Studio 21.1+ and After Effects installed**, the intended workflow is:
+
+1. Install `dist/Dynamic Bridge.pkg` and restart both applications.
+2. Enable **External scripting → Local** in Resolve and **Allow Scripts to Write Files and Access Network** in After Effects.
+3. Select an ordinary video clip in Resolve and choose **Workspace → Scripts → Utility → Replace with After Effects Composition**.
+4. Animate the generated composition in After Effects. Keep its project path, name, frame rate and duration.
+5. Press **Cmd+S**. The bridge waits for the save to settle, renders in the background, and selects the finished render as a new take on the same Resolve clip. Keep Resolve and the original timeline open. No manual Render or Apply command is needed for this automatic link.
+
+You can also use **File → Scripts → Resolve AE Bridge → Save and update Resolve** and **Check link status** in AE. Clicking Render for Resolve on an automatic link now saves for the background worker, avoiding a competing manual render. Status is refreshed when you click Check link status; it is the worker's last recorded state, not a live process health check.
+
+Workers now remain active until Stop or process/computer shutdown, including after long editing breaks. Run **Resume AE Updates** after a restart. New saves supersede in-progress renders. A temporary Resolve disconnect keeps the finished render pending and retries placement without rendering it again. Stop is checked again after connecting to Resolve, and files changed during hashing are deferred until the next poll.
+
+For a read-only setup report, run `python3 resolve_ae/bridge.py doctor`. To test the configured background Python interpreter's connection with Resolve open, run `python3 resolve_ae/bridge.py check-connection` **from Terminal**, not a Resolve menu callback. It isolates native scripting crashes and reports connection errors. Successful connection is not a render test.
+
+**Verification boundary:** automated tests exercise the watcher with real subprocesses and simulated AE/Resolve hosts, including repeated saves, a save during rendering, duplicate workers, disconnect recovery and Stop. Actual rendering, effect compatibility, licensing, color and native host integration still require a real round trip. AE is not installed on this development Mac. The Windows installer and Resolve Free/App Store workflow remain manual; automatic save updates are macOS Studio only.
+
+## Reliability update (0.1.4)
+
+Resume now skips manual Lua links and damaged job manifests, so they cannot break background recovery. Reopening a background link validates the original timeline destination before restarting it. Each saved link retains its own output template even if the default configuration changes. Stop works when After Effects is missing. Failed AE render-queue insertion restores previously queued user renders.
+
+Run `python3 resolve_ae/bridge.py doctor` from this source folder for a read-only setup check (exit code 1 means a required application or executable is missing). This check does not connect to Resolve or verify licensing or host preferences. It prints the configured application paths to help diagnose stale installations.
+
+The updated packages are in `dist/`. Install After Effects separately before installing the bridge, then restart the hosts. For automatic save updates on macOS Studio, use **Replace with After Effects Composition**, edit the generated `Composition.aep`, and save. **Send to After Effects** remains the manual workflow and requires **Render for Resolve** followed by **Apply AE Render**. Saving a manual link does not start background rendering.
+
+Validation: Python, simulated AE, and simulated Lua/macOS/Windows tests pass. After Effects and aerender are absent on this development Mac, so a native round trip is still unverified. This update does not establish instant playback or universal media compatibility.
+
 ## Windows update (0.1.2)
 
 Use `dist/Dynamic Bridge Setup.exe`. Close both apps before installing, then restart them. The installer now places Resolve scripts in the documented all-users ProgramData directory, with the shared library alongside them. It also refreshes an existing per-user library for the account running setup. If an older installation belongs to a different Windows account, uninstall that old per-user copy from that account first so it cannot shadow the new scripts.
@@ -49,7 +77,7 @@ Resolve's documented scripting and Workflow Integration interfaces do not expose
 4. After the save is stable for three seconds, `aerender` renders in a separate process. The finished MOV is imported into Resolve, added as a take, and selected. This also saves the current Resolve project, including other unsaved changes in that project.
 5. Further saves produce new renders. A save during a render supersedes that render; the newer saved version is rendered next. The shot stays unchanged until a successful render is available. This is render-on-save, not instant live playback.
 
-The first generated project save also triggers a render. Saving with no content changes may not trigger another render. Use **Resume AE Updates** after restarting your computer, after fixing a failed render, or when a watcher has stopped. Use **Stop AE Updates** to stop all bridge watchers; an already running render finishes, but its output is not applied after a stop request. Workers stop after eight hours without a new save.
+The first generated project save also triggers a render. Saving with no content changes may not trigger another render. Use **Resume AE Updates** after restarting your computer, after fixing a failed render, or when a watcher has stopped. Use **Stop AE Updates** to stop all bridge watchers; an already running render finishes, but its output is not applied after a stop request. Workers continue watching during idle periods until stopped or the process/computer shuts down.
 
 ## Scope and limitations
 
@@ -58,7 +86,7 @@ The first generated project save also triggers a render. Saving with no content 
 - Color-management matching between the apps is manual. Validate color, scaling, alpha, and first/last frames on a short sample before using this in a color-managed project.
 - Keep the original project/timeline open for automatic placement. Otherwise the finished render waits. Moving, trimming, slipping, changing speed, or replacing the linked clip pauses updates instead of guessing a new destination. Reopening another take from the bridge is allowed.
 - **Save As** to a new `.aep` path does not retarget the link. Continue saving the generated file. AE auto-save backups in other paths are ignored.
-- Each shot has a lightweight watcher. A shared lock permits **one background render at a time per jobs directory**, limiting competing AE processes. Watchers check file metadata first and hash changed files in chunks; unchanged projects are not reread every three seconds. Close AE projects normally; workers use their saved copies.
+- Each shot has a lightweight watcher. A shared lock permits **one background render at a time per jobs directory**, limiting competing AE processes. Watchers check file metadata first and hash changed files in chunks; unchanged projects are not reread on each polling interval. Close AE projects normally; workers use their saved copies.
 - New renders use unique filenames, avoiding overwriting media currently in use by Resolve. Old renders are deliberately retained because timeline takes reference them. Delete only versions you have removed from your project.
 - No native right-click menu integration, live preview, or automatic installation of either host app. The manual Lua workflow includes a Windows installer; background Python rendering is macOS-only.
 
@@ -82,6 +110,8 @@ To uninstall, run Stop AE Updates, allow any active render to finish, and remove
 python3 -m unittest discover -s tests -v
 python3 -m py_compile resolve_ae/bridge.py install.py scripts/*.py
 node --test tests/test_ae.cjs
+lua tests/test_lua.lua
+USERPROFILE='C:\Users\Test' lua tests/test_lua_windows.lua
 ```
 
 Before production use, perform a real smoke test: a ten-frame 100% speed shot, an unmistakable AE overlay, save, verify exact first/last source frames and timeline placement, save a second change during render, inspect Take Selector, switch projects before a render completes, and verify Stop prevents placement. Test a non-24 fps shot and a source filename with spaces/quotes as well.
